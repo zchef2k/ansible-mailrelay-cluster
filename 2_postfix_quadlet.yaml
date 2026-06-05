@@ -1,0 +1,83 @@
+---
+- name: Deploy Postfix Mail Relay via Quadlet
+  hosts: mail_nodes
+  become: true
+  tasks:
+    # create a directory to hold postfix config on the host (mounted into container)
+    - name: Create Postfix config directory
+      ansible.builtin.file:
+        path: "/opt/postfix/config"
+        state: directory
+        owner: "{{ mail_user }}"
+        group: "{{ mail_user }}"
+        mode: '0750'
+
+    - name: Ensure Quadlet directory exists
+      ansible.builtin.file:
+        path: "/home/{{ mail_user }}/.config/containers/systemd"
+        state: directory
+        owner: "{{ mail_user }}"
+        group: "{{ mail_user }}"
+        mode: '0750'
+
+    - name: Test filesystem where user's home directory is located
+      ansible.builtin.command: "stat -f -c %T /home/{{ mail_user }}"
+      register: home_fs_type
+
+    - name: Change podman storage config if btrfs is detected
+      ansible.builtin.blockinfile:
+        path: "/home/{{ mail_user }}/.config/containers/storage.conf"
+        block: |
+          [storage]
+          driver = "btrfs"
+        create: true
+        mode: '0640'
+        owner: "{{ mail_user }}"
+        group: "{{ mail_user }}"
+      when: home_fs_type.stdout == "btrfs"
+
+    - name: Deploy Quadlet Container file
+      ansible.builtin.template:
+        src: postfix.j2
+        dest: "/home/{{ mail_user }}/.config/containers/systemd/postfix.container"
+        owner: "{{ mail_user }}"
+        group: "{{ mail_user }}"
+        mode: '0640'
+      notify:
+        - Install acl
+        - Reload quadlet
+        - Start Postfix
+
+  handlers:
+    - name: Install acl
+      ansible.builtin.package:
+        name: acl
+        state: present
+
+    - name: Reload quadlet
+      ansible.builtin.systemd:
+        scope: user
+        daemon_reexec: true
+      environment:
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ mail_user_uid }}/bus"
+        XDG_RUNTIME_DIR: "/run/user/{{ mail_user_uid }}"
+      become: true
+      become_method: ansible.builtin.sudo
+      become_user: "{{ mail_user }}"
+      vars:
+        ansible_remote_tmp: /tmp/.ansible-{{ mail_user }}
+
+    - name: Start Postfix
+      ansible.builtin.systemd:
+        name: postfix
+        scope: user
+        enabled: true
+        state: started
+      environment:
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ mail_user_uid }}/bus"
+        XDG_RUNTIME_DIR: "/run/user/{{ mail_user_uid }}"
+      become: true
+      become_method: ansible.builtin.sudo
+      become_user: "{{ mail_user }}"
+      vars:
+        ansible_remote_tmp: /tmp/.ansible-{{ mail_user }}

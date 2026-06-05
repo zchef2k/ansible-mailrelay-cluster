@@ -1,0 +1,48 @@
+---
+- name: Configure Keepalived VIP
+  hosts: mail_nodes
+  become: true
+  tasks:
+    - name: Install Keepalived
+      ansible.builtin.dnf:
+        name: keepalived
+        state: present
+
+    - name: Configure firewalld for Keepalived VRRP
+      ansible.posix.firewalld:
+        rich_rule: rule protocol value="vrrp" accept
+        permanent: true
+        state: enabled
+
+    - name: Ensure conf.d directory exists
+      ansible.builtin.file:
+        path: /etc/keepalived/conf.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Add include directive to keepalived.conf
+      ansible.builtin.lineinfile:
+        path: /etc/keepalived/keepalived.conf
+        line: "include /etc/keepalived/conf.d/*.conf"
+        create: true
+        owner: root
+        group: root
+        mode: '0640'
+
+    - name: Deploy mail relay VRRP config
+      ansible.builtin.template:
+        src: keepalived.j2
+        dest: /etc/keepalived/conf.d/mail_relay.conf
+        owner: root
+        group: root
+        mode: '0640'
+      notify: Reload Keepalived
+
+  handlers:
+    - name: Reload Keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        state: reloaded
+        enabled: true

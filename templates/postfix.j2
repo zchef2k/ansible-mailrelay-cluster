@@ -1,0 +1,20 @@
+[Unit]
+Description=Postfix Mail Relay
+After=network-online.target
+
+[Container]
+Image=docker.io/juanluisbaptiste/postfix:latest
+ContainerName=postfix-relay
+PublishPort=1025:25/tcp
+Environment=SMTP_SERVER={{ relay_host }}
+Environment=SMTP_PORT={{ relay_port }}
+Environment=SMTP_USERNAME={{ relay_user }}
+Environment=SMTP_PASSWORD={{ relay_password }}
+Environment=SMTP_NETWORKS={{ mynetworks }}
+Environment=SERVER_HOSTNAME={{ fqdn }}
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

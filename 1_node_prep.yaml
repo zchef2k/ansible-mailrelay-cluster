@@ -1,0 +1,70 @@
+---
+- name: Prep Nodes for Postfix Mail Relay Cluster
+  hosts: mail_nodes
+  become: true
+  tasks:
+    # create a dedicated user to run Postfix in rootless podman
+    - name: Create mailuser with lingering
+      ansible.builtin.user:
+        name: "{{ mail_user }}"
+        shell: /sbin/nologin
+        system: true
+        create_home: true
+        uid: "{{ mail_user_uid }}"
+
+    - name: Check if subuid range is already assigned
+      ansible.builtin.shell: "grep -q '^{{ mail_user }}:' /etc/subuid"
+      register: subid_check
+      failed_when: false
+      changed_when: false
+
+    - name: Set subordinate ranges (100000-165535)
+      ansible.builtin.command: "{{ item }}"
+      when: subid_check.rc != 0
+      loop:
+        - "usermod --add-subuids 100000-165535 {{ mail_user }}"
+        - "usermod --add-subgids 100000-165535 {{ mail_user }}"
+
+    # enable lingering for the user to allow running containers without an active session
+    - name: Enable lingering for mailuser
+      ansible.builtin.command: "loginctl enable-linger {{ mail_user }}"
+      args:
+        creates: "/var/lib/systemd/linger/{{ mail_user }}"
+
+    # ensure firewalld is installed
+    - name: Ensure firewalld is installed and running
+      ansible.builtin.dnf:
+        name: firewalld
+        state: installed
+
+    # ensure firewalld is running
+    - name: Ensure firewalld is running and enabled
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: true
+
+    # redirect privileged low port 25 traffic to unprivileged container high port 1025 using firewalld
+    - name: Configure Firewalld redirects (Port 25 to 1025)
+      ansible.posix.firewalld:
+        rich_rule: 'rule family="ipv4" forward-port port="25" protocol="{{ item }}" to-port="1025"'
+        state: enabled
+        permanent: true
+        immediate: true
+      loop: [tcp]
+
+    # the same for the loopback interface to test locally on the node
+    - name: Add local loopback redirect (Direct Rule)
+      ansible.builtin.shell: |
+        firewall-cmd --permanent --direct --add-rule ipv4 nat OUTPUT 0 -p {{ item }} -o lo --dport 25 -j REDIRECT --to-ports 1025
+      loop: [tcp]
+      changed_when: false
+
+    # open port 25 to allow inbound SMTP traffic to the node
+    - name: Open SMTP port
+      ansible.posix.firewalld:
+        port: "{{ item }}"
+        state: enabled
+        permanent: true
+        immediate: true
+      loop: ["25/tcp"]
